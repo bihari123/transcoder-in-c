@@ -1,0 +1,27 @@
+// presets.c
+#include "../include/presets.h"
+
+QualityPreset QUALITY_PRESETS[MAX_QUALITY_LEVELS] = {{.width = 1920,
+                                                      .height = 1080,
+                                                      .fps = 30,
+                                                      .bitrate = 6000000,
+                                                      .name = "1080p",
+                                                      .keyframe_interval = 60,
+                                                      .dropped_frames = 0,
+                                                      .total_frames = 0},
+                                                     {.width = 1280,
+                                                      .height = 720,
+                                                      .fps = 30,
+                                                      .bitrate = 3500000,
+                                                      .name = "720p",
+                                                      .keyframe_interval = 60,
+                                                      .dropped_frames = 0,
+                                                      .total_frames = 0},
+                                                     {.width = 854,
+                                                      .height = 480,
+                                                      .fps = 30,
+                                                      .bitrate = 1500000,
+                                                      .name = "480p",
+                                                      .keyframe_interval = 30,
+                                                      .dropped_frames = 0,
+                                                      .total_frames = 0}};

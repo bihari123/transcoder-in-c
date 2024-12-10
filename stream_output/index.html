@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Low Latency Streaming Client</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: Arial, sans-serif;
+        background-color: #1a1a1a;
+        color: #ffffff;
+      }
+      .container {
+        max-width: 1280px;
+        margin: 0 auto;
+        padding: 20px;
+      }
+      .player-wrapper {
+        position: relative;
+        background: #000;
+        aspect-ratio: 16/9;
+        margin-bottom: 20px;
+      }
+      .error-overlay {
+        display: none;
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.8);
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+      }
+      .error-message {
+        color: #ff4444;
+        margin-bottom: 10px;
+      }
+      .controls-panel,
+      .stats-panel {
+        background: #2a2a2a;
+        padding: 15px;
+        border-radius: 5px;
+        margin-bottom: 20px;
+      }
+      .control-group {
+        display: flex;
+        align-items: center;
+        margin-bottom: 10px;
+        gap: 10px;
+      }
+      .stat-item {
+        display: inline-block;
+        margin-right: 20px;
+        margin-bottom: 10px;
+      }
+      .stat-label {
+        color: #888;
+        font-size: 0.9em;
+        margin-bottom: 5px;
+      }
+      .stat-value {
+        font-weight: bold;
+      }
+      button {
+        background: #4a4a4a;
+        border: none;
+        color: white;
+        padding: 8px 15px;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      button:hover {
+        background: #5a5a5a;
+      }
+      .debug-panel {
+        display: none;
+        background: #2a2a2a;
+        padding: 15px;
+        border-radius: 5px;
+        height: 200px;
+        overflow-y: auto;
+        font-family: monospace;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="player-wrapper">
+        <video id="videoPlayer" controls playsinline></video>
+        <div id="errorOverlay" class="error-overlay">
+          <div class="error-message"></div>
+          <button onclick="retryStream()">Retry</button>
+        </div>
+      </div>
+
+      <div class="controls-panel">
+        <div class="control-group">
+          <button onclick="setQuality('auto')">Auto</button>
+          <button onclick="setQuality('1080p')">1080p</button>
+          <button onclick="setQuality('720p')">720p</button>
+          <button onclick="setQuality('480p')">480p</button>
+          <button onclick="syncToLive()">Sync to Live</button>
+        </div>
+        <div class="control-group">
+          <span>Target Latency (s):</span>
+          <input
+            type="number"
+            id="targetLatency"
+            value="3"
+            min="1"
+            max="10"
+            step="0.5"
+          />
+          <button onclick="reloadStream()">Reload Stream</button>
+        </div>
+        <div class="control-group">
+          <span>Debug Mode:</span>
+          <input type="checkbox" id="debugMode" onchange="toggleDebug()" />
+          <button onclick="clearStats()">Clear Stats</button>
+        </div>
+      </div>
+
+      <div class="stats-panel">
+        <div class="stat-item">
+          <div class="stat-label">Current Quality</div>
+          <div id="currentQuality" class="stat-value">Auto</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Latency</div>
+          <div id="currentLatency" class="stat-value">0 ms</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Buffer</div>
+          <div id="bufferLength" class="stat-value">0 s</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Bandwidth</div>
+          <div id="bandwidth" class="stat-value">0 Mbps</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Dropped Frames</div>
+          <div id="droppedFrames" class="stat-value">0</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Live Edge</div>
+          <div id="liveEdge" class="stat-value">0 s</div>
+        </div>
+      </div>
+
+      <div id="debugPanel" class="debug-panel">
+        <div id="debugLog"></div>
+      </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.4.12/hls.min.js"></script>
+    <script>
+      const video = document.getElementById("videoPlayer");
+      const errorOverlay = document.getElementById("errorOverlay");
+      let hls;
+      let stats = {
+        droppedFrames: 0,
+        totalFrames: 0,
+      };
+
+      // Optimized configuration for balance between latency and stability
+      const hlsConfig = {
+        debug: false,
+        enableWorker: true,
+        lowLatencyMode: true,
+        backBufferLength: 30,
+        // Buffer settings
+        maxBufferSize: 15 * 1000 * 1000, // 15MB max buffer size
+        maxBufferLength: 5, // 5 seconds target buffer
+        maxMaxBufferLength: 15, // 15 seconds max buffer
+        // Latency settings
+        liveSyncDurationCount: 3, // Number of segments to stay from live
+        liveMaxLatencyDurationCount: 10, // Maximum latency allowed
+        // Recovery settings
+        fragLoadingRetryDelay: 1000, // Retry delay for fragment loading
+        manifestLoadingRetryDelay: 1000, // Retry delay for manifest loading
+        levelLoadingRetryDelay: 1000, // Retry delay for level loading
+        // Error recovery
+        fragLoadingMaxRetry: 3, // Maximum retries for fragment loading
+        levelLoadingMaxRetry: 3, // Maximum retries for level loading
+        manifestLoadingMaxRetry: 3, // Maximum retries for manifest loading
+      };
+
+      function initPlayer() {
+        if (Hls.isSupported()) {
+          if (hls) {
+            hls.destroy();
+          }
+
+          hls = new Hls(hlsConfig);
+          hls.attachMedia(video);
+
+          hls.on(Hls.Events.MEDIA_ATTACHED, function () {
+            logDebug("Media attached");
+            hls.loadSource("master.m3u8");
+          });
+
+          hls.on(Hls.Events.MANIFEST_PARSED, function () {
+            logDebug("Manifest parsed, starting playback");
+            video.play().catch(handlePlayError);
+          });
+
+          // Error handling
+          hls.on(Hls.Events.ERROR, function (event, data) {
+            handleError(data);
+          });
+
+          // Stats monitoring
+          setInterval(updateStats, 1000);
+        }
+      }
+
+      function updateStats() {
+        if (!hls) return;
+
+        const stats = hls.stats;
+        const latency = hls.latency || 0;
+        const buffered = video.buffered;
+        const bufferLength = buffered.length
+          ? buffered.end(buffered.length - 1) - video.currentTime
+          : 0;
+
+        document.getElementById("currentLatency").textContent =
+          `${latency.toFixed(2)} s`;
+        document.getElementById("bufferLength").textContent =
+          `${bufferLength.toFixed(1)} s`;
+        document.getElementById("bandwidth").textContent =
+          `${(stats.bandwidth / 1000000).toFixed(2)} Mbps`;
+        document.getElementById("droppedFrames").textContent =
+          stats.droppedFrames || 0;
+        document.getElementById("liveEdge").textContent =
+          `${hls.liveSyncPosition ? (hls.liveSyncPosition - video.currentTime).toFixed(1) : 0} s`;
+      }
+
+      function handleError(data) {
+        logDebug(`Error: ${data.type} - ${data.details}`);
+
+        if (data.fatal) {
+          switch (data.type) {
+            case Hls.ErrorTypes.NETWORK_ERROR:
+              showError("Network error, retrying...");
+              hls.startLoad();
+              break;
+            case Hls.ErrorTypes.MEDIA_ERROR:
+              showError("Media error, recovering...");
+              hls.recoverMediaError();
+              break;
+            default:
+              showError("Fatal error, stream needs to be reloaded");
+              break;
+          }
+        }
+      }
+
+      function showError(message) {
+        const errorMessage = errorOverlay.querySelector(".error-message");
+        errorMessage.textContent = message;
+        errorOverlay.style.display = "flex";
+      }
+
+      function retryStream() {
+        errorOverlay.style.display = "none";
+        reloadStream();
+      }
+
+      function reloadStream() {
+        if (hls) {
+          const currentUrl = hls.url;
+          initPlayer(currentUrl);
+        }
+      }
+
+      function setQuality(level) {
+        if (!hls) return;
+
+        if (level === "auto") {
+          hls.currentLevel = -1;
+        } else {
+          const levels = hls.levels;
+          const targetHeight = parseInt(level);
+          const levelIndex = levels.findIndex((l) => l.height === targetHeight);
+          if (levelIndex !== -1) {
+            hls.currentLevel = levelIndex;
+          }
+        }
+
+        document.getElementById("currentQuality").textContent = level;
+      }
+
+      function syncToLive() {
+        if (hls && hls.liveSyncPosition) {
+          video.currentTime = hls.liveSyncPosition;
+        }
+      }
+
+      function handlePlayError(error) {
+        logDebug(`Playback error: ${error.message}`);
+        showError("Playback error, please try again");
+      }
+
+      function toggleDebug() {
+        const debugPanel = document.getElementById("debugPanel");
+        debugPanel.style.display = document.getElementById("debugMode").checked
+          ? "block"
+          : "none";
+      }
+
+      function logDebug(message) {
+        const debugLog = document.getElementById("debugLog");
+        const timestamp = new Date().toISOString().split("T")[1].split(".")[0];
+        debugLog.innerHTML += `${timestamp} - ${message}<br>`;
+        debugLog.scrollTop = debugLog.scrollHeight;
+      }
+
+      function clearStats() {
+        stats.droppedFrames = 0;
+        stats.totalFrames = 0;
+        document.getElementById("droppedFrames").textContent = "0";
+      }
+
+      // Initialize with your stream URL
+      initPlayer("YOUR_HLS_STREAM_URL");
+    </script>
+  </body>
+</html>
